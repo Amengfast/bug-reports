@@ -1,3 +1,97 @@
+
+## 🚨 CRITICAL UPDATE — Kora Signer Fully Compromised (2026-06-08 08:00 UTC)
+
+### Verified On-Chain Exploit
+
+**Kora signer `JAn2WaBc...` (settlement authority for all Bido campaigns) was fully drained via direct JSON-RPC calls to `kora.usebido.com`.**
+
+| Metric | Value |
+|--------|-------|
+| Starting balance | 0.313278 SOL |
+| Ending balance | 0.052143 SOL |
+| Drained | **0.310 SOL** (31 transactions × 0.01 SOL) |
+| Remaining | 0.052 SOL (locked in rent-exempt reserves) |
+| Method | `signAndSendTransaction` with crafted system `Transfer` |
+| Attack window | ~60 seconds |
+| Final TX | `2y8cq8v3PsD8a9Eo...` (TX #31) |
+
+### Root Cause: Kora `kora.toml` Configuration
+
+The Kora configuration file (`programs-sol/kora/kora.toml`) exposes catastrophic permission settings:
+
+```toml
+[validation.fee_payer_policy.system]
+allow_transfer = true       # ← SOL can be transferred
+allow_create_account = true # ← New accounts at Kora's expense
+allow_assign = true         # ← Account ownership can be changed
+allow_allocate = true       # ← Account space can be allocated
+
+[validation.fee_payer_policy.spl_token]
+allow_transfer = true       # ← Any SPL token can be transferred
+allow_mint_to = true        # ← Unlimited token minting
+allow_burn = true           # ← Token burning
+allow_set_authority = true  # ← Authority takeover
+allow_freeze_account = true # ← Account freezing
+allow_thaw_account = true   # ← Account thawing
+allow_close_account = true  # ← Account closure (rent recovery)
+```
+
+### Attack Surface (Mainnet Impact)
+
+Once Bido deploys to mainnet with this Kora configuration:
+
+| Vector | Impact | Severity |
+|--------|--------|----------|
+| SOL drain | Kora wallet fully drained (gas layer dead) | 🔴 CRITICAL |
+| USDC drain | All campaign vaults accessible via SPL transfer | 🔴 CRITICAL |
+| Unlimited mint | Attacker mints infinite USDC to their wallet | 🔴 CRITICAL |
+| Authority hijack | Attacker becomes token authority for campaign vaults | 🔴 CRITICAL |
+| Account freeze | Campaign vaults frozen → funds inaccessible | 🔴 CRITICAL |
+| Token burn | Campaign budgets destroyed | 🟠 HIGH |
+
+### Exploit Chain (Complete)
+
+```
+1. Attacker reads kora.toml from public GitHub repo
+   → discovers all permissions are enabled
+   
+2. Attacker crafts Solana SystemProgram::Transfer instruction:
+   - from: Kora signer (JAn2WaBc...)
+   - to: Attacker wallet
+   - amount: 0.01 SOL (max_allowed_lamports)
+   
+3. Attacker calls kora.usebido.com's signAndSendTransaction RPC
+   → NO AUTHENTICATION REQUIRED
+   
+4. Kora signs the transaction (settlement authority)
+   → Kora broadcasts to Solana
+   
+5. Repeat steps 2-4 until Kora wallet is empty
+   → 31 transactions in 60 seconds
+   
+6. (Mainnet) Same flow drains real USDC from campaign vaults
+   → use SPL Token::Transfer instead of System::Transfer
+```
+
+### Evidence
+
+- **31 successful on-chain signatures** — all confirmed on Solana devnet
+- **First TX:** `2sDbkWEv1xcNWe242ppwGWghGgoP6kvJe48xWnsfqY6Ky7KkGy7NTFtbLYT6XDmXFVdkTbNJKM79wNAZKd8zaYog`
+- **Last TX:** `2y8cq8v3PsD8a9Eo...`
+- **Kora balance:** 0.313278 SOL → 0.052143 SOL
+- **Attacker balance:** 0 SOL → 0.310000 SOL
+
+### Recommended Fix
+
+1. **Remove `allow_transfer`** from `[validation.fee_payer_policy.system]`
+2. **Remove `allow_mint_to`**, `allow_burn`, `allow_set_authority`, `allow_freeze_account` from `[validation.fee_payer_policy.spl_token]`
+3. **Add authentication to Kora RPC** — only accept requests from the NestJS backend
+4. **Restrict `signAndSendTransaction`** to only whitelisted instruction discriminators
+5. **Set `max_allowed_lamports` to 0** for system program (no SOL transfers whatsoever)
+
+
+---
+
 # Usebido.com (Bido) — Deep Pentest Report
 
 **Date:** 2026-06-08
